@@ -38,10 +38,9 @@ build/
 
 # Environment variables
 .env
-.env.*
 
 # Model files
-*.pkl
+# *.pkl
 *.joblib
 *.hdf5
 
@@ -58,4 +57,4 @@ htmlcov/
 *.swo
 
 data/raw
-data/models
+# data/models
