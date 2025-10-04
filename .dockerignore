@@ -1,0 +1,13 @@
+__pycache__/
+.pytest_cache/
+.venv/
+env/
+data/
+notebooks/
+tests/
+*.pyc
+*.pkl
+*.sqlite3
+dist/
+build/
+__pycache__
