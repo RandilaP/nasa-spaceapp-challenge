@@ -100,6 +100,12 @@ async def startup_event():
     from src.model import AirQualityForecaster
     from src.preprocessor import AirQualityPreprocessor
     import yaml
+    import os
+    import pandas as pd
+    from dotenv import load_dotenv
+
+    # Load .env if present so env vars can be specified in a file
+    load_dotenv()
     
     # Load config
     with open('config.yaml', 'r') as f:
@@ -107,13 +113,27 @@ async def startup_event():
     
     forecaster = AirQualityForecaster(config)
     preprocessor = AirQualityPreprocessor(config)
-    
-    # Try to load existing model
-    try:
-        forecaster.load_model('./data/models/best_model.pkl')
-        logger.info("Loaded existing model")
-    except:
-        logger.warning("No existing model found. Train a model first!")
+    # Try to load existing model from configurable path
+    model_path = os.getenv('MODEL_PATH', './data/models/best_model.pkl')
+    if os.path.exists(model_path):
+        try:
+            forecaster.load_model(model_path)
+            logger.info(f"Loaded existing model from {model_path}")
+        except Exception as e:
+            logger.error(f"Failed to load model from {model_path}: {e}")
+    else:
+        logger.warning(f"Model not found at {model_path}. Start training and save a model to this path.")
+
+    # Optionally load latest data into memory for the API to serve
+    latest_data_path = os.getenv('LATEST_DATA_PATH', './data/processed/processed_data.csv')
+    if os.path.exists(latest_data_path):
+        try:
+            latest_data = pd.read_csv(latest_data_path, parse_dates=['timestamp'])
+            logger.info(f"Loaded latest data from {latest_data_path} with {len(latest_data)} records")
+        except Exception as e:
+            logger.error(f"Failed to load latest data from {latest_data_path}: {e}")
+    else:
+        logger.warning(f"Latest data not found at {latest_data_path}. API will return 503 for data endpoints until updated.")
     
     logger.info("API started successfully")
 

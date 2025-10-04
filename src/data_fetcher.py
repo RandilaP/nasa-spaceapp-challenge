@@ -22,8 +22,25 @@ class NASADataFetcher:
     def authenticate(self):
         """Authenticate with NASA Earthdata"""
         try:
+            # Prefer non-interactive auth when credentials are provided via env vars
+            import os
+            username = os.getenv('EARTHDATA_USERNAME')
+            password = os.getenv('EARTHDATA_PASSWORD')
+
+            if username and password:
+                # Attempt non-interactive login using provided credentials.
+                try:
+                    # earthaccess API may accept username/password depending on version
+                    self.auth = earthaccess.login(username=username, password=password)
+                    logger.info("Authenticated with NASA Earthdata using environment credentials")
+                    return
+                except Exception as e:
+                    logger.warning(f"Non-interactive Earthdata auth failed: {e} - falling back to interactive")
+
+            # Fallback to interactive login for developer convenience
             self.auth = earthaccess.login(strategy="interactive")
-            logger.info("Successfully authenticated with NASA Earthdata")
+            logger.info("Successfully authenticated with NASA Earthdata (interactive)")
+
         except Exception as e:
             logger.error(f"Authentication failed: {e}")
             raise
@@ -61,8 +78,18 @@ class NASADataFetcher:
                 # Extract relevant variables
                 data_list.append(self._process_tempo_file(ds, lat, lon))
                 ds.close()
-            
-            df = pd.concat(data_list, ignore_index=True)
+            # Remove empty results
+            cleaned = [d for d in data_list if isinstance(d, pd.DataFrame) and not d.empty]
+            if not cleaned:
+                logger.warning("Downloaded TEMPO files did not contain usable variables; generating synthetic TEMPO data")
+                return self._generate_synthetic_tempo_data(start_date, end_date)
+
+            df = pd.concat(cleaned, ignore_index=True)
+            # Ensure timestamp column exists
+            if 'timestamp' not in df.columns:
+                logger.warning("Processed TEMPO data missing 'timestamp' column; generating synthetic TEMPO data")
+                return self._generate_synthetic_tempo_data(start_date, end_date)
+
             return df
             
         except Exception as e:
@@ -94,8 +121,17 @@ class NASADataFetcher:
                 ds = xr.open_dataset(file)
                 data_list.append(self._process_weather_file(ds, lat, lon))
                 ds.close()
-            
-            df = pd.concat(data_list, ignore_index=True)
+
+            cleaned = [d for d in data_list if isinstance(d, pd.DataFrame) and not d.empty]
+            if not cleaned:
+                logger.warning("Downloaded weather files did not contain usable variables; generating synthetic weather data")
+                return self._generate_synthetic_weather_data(start_date, end_date)
+
+            df = pd.concat(cleaned, ignore_index=True)
+            if 'timestamp' not in df.columns:
+                logger.warning("Processed weather data missing 'timestamp' column; generating synthetic weather data")
+                return self._generate_synthetic_weather_data(start_date, end_date)
+
             return df
             
         except Exception as e:
@@ -148,39 +184,162 @@ class NASADataFetcher:
     
     def _process_tempo_file(self, ds: xr.Dataset, lat: float, lon: float) -> pd.DataFrame:
         """Extract data from TEMPO/OMI netCDF file"""
-        # Find nearest grid point
-        lat_idx = np.argmin(np.abs(ds['lat'].values - lat))
-        lon_idx = np.argmin(np.abs(ds['lon'].values - lon))
-        
-        data = {
-            'timestamp': pd.to_datetime(ds['time'].values),
-            'no2': ds['NO2'].values[lat_idx, lon_idx] if 'NO2' in ds else np.nan,
-            'hcho': ds['HCHO'].values[lat_idx, lon_idx] if 'HCHO' in ds else np.nan,
-        }
-        
-        return pd.DataFrame([data])
+        try:
+            # Try to find latitude/longitude arrays (datasets vary in naming)
+            lat_candidates = ['lat', 'latitude', 'lats', 'nav_lat']
+            lon_candidates = ['lon', 'longitude', 'lons', 'nav_lon']
+
+            lat_arr = None
+            lon_arr = None
+            for name in lat_candidates:
+                if name in ds:
+                    lat_arr = ds[name].values
+                    break
+                if name in ds.coords:
+                    lat_arr = ds.coords[name].values
+                    break
+
+            for name in lon_candidates:
+                if name in ds:
+                    lon_arr = ds[name].values
+                    break
+                if name in ds.coords:
+                    lon_arr = ds.coords[name].values
+                    break
+
+            if lat_arr is None or lon_arr is None:
+                logger.warning(f"No lat/lon coordinates found in TEMPO dataset. Variables on the dataset include {list(ds.variables.keys())}")
+                return pd.DataFrame()
+
+            # Find nearest grid point
+            lat_idx = np.argmin(np.abs(lat_arr - lat))
+            lon_idx = np.argmin(np.abs(lon_arr - lon))
+
+            # Time
+            time_vals = None
+            if 'time' in ds:
+                time_vals = ds['time'].values
+            elif 'Time' in ds:
+                time_vals = ds['Time'].values
+            else:
+                # fallback to now
+                time_vals = [pd.Timestamp.now()]
+
+            # Helper to extract variable if present and indexed by lat/lon
+            def extract_var(var_names):
+                for v in var_names:
+                    if v in ds:
+                        arr = ds[v].values
+                        try:
+                            # try [lat, lon] ordering or time,lat,lon
+                            if arr.ndim == 2:
+                                return arr[lat_idx, lon_idx]
+                            elif arr.ndim >= 3:
+                                # assume time, lat, lon or lat, lon, time
+                                # try time, lat, lon
+                                return arr[0, lat_idx, lon_idx]
+                            else:
+                                return arr.item()
+                        except Exception:
+                            return np.nan
+                return np.nan
+
+            no2 = extract_var(['NO2', 'no2', 'tropospheric_NO2_column_amount'])
+            hcho = extract_var(['HCHO', 'hcho'])
+
+            data = {
+                'timestamp': pd.to_datetime(time_vals),
+                'no2': no2,
+                'hcho': hcho,
+            }
+
+            return pd.DataFrame([data])
+
+        except Exception as e:
+            logger.error(f"Error processing TEMPO file: {e}")
+            return pd.DataFrame()
     
     def _process_weather_file(self, ds: xr.Dataset, lat: float, lon: float) -> pd.DataFrame:
         """Extract weather data from MERRA-2 file"""
-        lat_idx = np.argmin(np.abs(ds['lat'].values - lat))
-        lon_idx = np.argmin(np.abs(ds['lon'].values - lon))
-        
-        times = pd.to_datetime(ds['time'].values)
-        
-        records = []
-        for i, time in enumerate(times):
-            records.append({
-                'timestamp': time,
-                'temperature': ds['T2M'].values[i, lat_idx, lon_idx] if 'T2M' in ds else np.nan,
-                'wind_speed': np.sqrt(
-                    ds['U10M'].values[i, lat_idx, lon_idx]**2 + 
-                    ds['V10M'].values[i, lat_idx, lon_idx]**2
-                ) if 'U10M' in ds and 'V10M' in ds else np.nan,
-                'humidity': ds['RH'].values[i, lat_idx, lon_idx] if 'RH' in ds else np.nan,
-                'pressure': ds['PS'].values[i, lat_idx, lon_idx] if 'PS' in ds else np.nan,
-            })
-        
-        return pd.DataFrame(records)
+        try:
+            # Find lat/lon arrays similarly to TEMPO processing
+            lat_candidates = ['lat', 'latitude', 'lats', 'nav_lat']
+            lon_candidates = ['lon', 'longitude', 'lons', 'nav_lon']
+
+            lat_arr = None
+            lon_arr = None
+            for name in lat_candidates:
+                if name in ds:
+                    lat_arr = ds[name].values
+                    break
+                if name in ds.coords:
+                    lat_arr = ds.coords[name].values
+                    break
+
+            for name in lon_candidates:
+                if name in ds:
+                    lon_arr = ds[name].values
+                    break
+                if name in ds.coords:
+                    lon_arr = ds.coords[name].values
+                    break
+
+            if lat_arr is None or lon_arr is None:
+                logger.warning(f"No lat/lon coordinates found in weather dataset. Variables on the dataset include {list(ds.variables.keys())}")
+                return pd.DataFrame()
+
+            lat_idx = np.argmin(np.abs(lat_arr - lat))
+            lon_idx = np.argmin(np.abs(lon_arr - lon))
+
+            # Time values
+            if 'time' in ds:
+                times = pd.to_datetime(ds['time'].values)
+            else:
+                times = pd.to_datetime([pd.Timestamp.now()])
+
+            records = []
+            for i, time in enumerate(times):
+                def safe_get(var_names):
+                    for v in var_names:
+                        if v in ds:
+                            arr = ds[v].values
+                            try:
+                                if arr.ndim >= 3:
+                                    return arr[i, lat_idx, lon_idx]
+                                elif arr.ndim == 2:
+                                    return arr[lat_idx, lon_idx]
+                                else:
+                                    return arr.item()
+                            except Exception:
+                                return np.nan
+                    return np.nan
+
+                temperature = safe_get(['T2M', 'T', 't2m', 'Temperature'])
+                u = safe_get(['U10M', 'U10', 'u10'])
+                v = safe_get(['V10M', 'V10', 'v10'])
+                humidity = safe_get(['RH', 'rh', 'RelativeHumidity'])
+                pressure = safe_get(['PS', 'pressure', 'P'])
+
+                wind_speed = np.nan
+                try:
+                    if not np.isnan(u) and not np.isnan(v):
+                        wind_speed = np.sqrt(u**2 + v**2)
+                except Exception:
+                    wind_speed = np.nan
+
+                records.append({
+                    'timestamp': time,
+                    'temperature': temperature,
+                    'wind_speed': wind_speed,
+                    'humidity': humidity,
+                    'pressure': pressure,
+                })
+
+            return pd.DataFrame(records)
+
+        except Exception as e:
+            logger.error(f"Error processing weather file: {e}")
+            return pd.DataFrame()
     
     def _generate_synthetic_tempo_data(self, start_date: str, end_date: str) -> pd.DataFrame:
         """Generate realistic synthetic TEMPO data for prototype"""
