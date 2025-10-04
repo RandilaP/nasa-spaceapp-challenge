@@ -1,0 +1,61 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+env/
+.venv/
+.env/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Data files
+*.csv
+*.tsv
+*.xls
+*.xlsx
+*.h5
+*.db
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python egg files
+*.egg
+*.egg-info/
+dist/
+build/
+
+# VSCode settings
+.vscode/
+
+# Environment variables
+.env
+.env.*
+
+# Model files
+*.pkl
+*.joblib
+*.hdf5
+
+# Test and coverage
+htmlcov/
+.tox/
+.coverage
+.cache
+.pytest_cache/
+
+# Misc
+*.bak
+*.swp
+*.swo
+
+data/raw
+data/models

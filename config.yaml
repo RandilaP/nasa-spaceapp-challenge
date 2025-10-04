@@ -1,0 +1,44 @@
+# Data Configuration
+data:
+  tempo_variables:
+    - NO2
+    - HCHO
+    - AI
+  
+  location:
+    lat: 6.9271  # Colombo, Sri Lanka
+    lon: 79.8612
+    radius: 50  # km
+  
+  time_range:
+    history_days: 90
+    forecast_hours: 24
+
+# Model Configuration
+model:
+  features:
+    - no2_mean
+    - hcho_mean
+    - temperature
+    - wind_speed
+    - wind_direction
+    - humidity
+    - pressure
+    - hour_of_day
+    - day_of_week
+    - month
+  
+  target: aqi
+  
+  algorithms:
+    - random_forest
+    - gradient_boosting
+  
+  validation_split: 0.2
+  random_state: 42
+
+# API Configuration
+api:
+  host: 0.0.0.0
+  port: 8000
+  reload: true
