@@ -2,15 +2,15 @@ FROM python:3.11-slim
 
 # Install system dependencies required for netCDF4, h5py, and other scientific libs
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-       build-essential \
-       libhdf5-dev \
-       libhdf5-103 \
-       libnetcdf-dev \
-       netcdf-bin \
-       git \
-       wget \
-    && rm -rf /var/lib/apt/lists/*
+     && apt-get install -y --no-install-recommends \
+         build-essential \
+         ca-certificates \
+         libhdf5-dev \
+         libnetcdf-dev \
+         netcdf-bin \
+         git \
+         wget \
+     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
