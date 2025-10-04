@@ -1,35 +1,28 @@
-FROM python:3.11-slim
-
-# Install system dependencies required for netCDF4, h5py, and other scientific libs
-RUN apt-get update \
-     && apt-get install -y --no-install-recommends \
-         build-essential \
-         ca-certificates \
-         libhdf5-dev \
-         libnetcdf-dev \
-         netcdf-bin \
-         git \
-         wget \
-     && rm -rf /var/lib/apt/lists/*
+FROM continuumio/miniconda3:latest
 
 WORKDIR /app
 
-# Copy requirement file first to leverage layer caching
-COPY requirements.txt ./
+# Create a conda env and install heavy dependencies from conda-forge
+RUN conda update -n base -c defaults conda -y \
+    && conda create -n airq python=3.11 -y \
+    && /bin/bash -lc "source /opt/conda/etc/profile.d/conda.sh && conda activate airq && conda install -c conda-forge -y \
+       netcdf4 h5py numpy pandas scikit-learn joblib pyyaml requests fastapi uvicorn pydantic" \
+    && conda clean -afy
 
-# Upgrade pip and install requirements
-RUN pip install --upgrade pip setuptools wheel \
-    && pip install --no-cache-dir -r requirements.txt
+# Ensure the conda env is on PATH
+ENV PATH /opt/conda/envs/airq/bin:$PATH
 
-# Copy the project
+# Copy project files
 COPY . /app
 
-# Create data dirs with permissive permissions for runtime writes
+# Install any remaining pip-only requirements (if present)
+RUN pip install --upgrade pip setuptools wheel \
+    && pip install --no-cache-dir -r requirements.txt || true
+
+# Create data dirs
 RUN mkdir -p /app/data/raw /app/data/processed /app/data/models \
     && chmod -R a+rwx /app/data
 
-# Expose port used by uvicorn
 EXPOSE 8000
 
-# Default command: run uvicorn serving the FastAPI app
 CMD ["uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8000"]
