@@ -115,6 +115,22 @@ async def startup_event():
     preprocessor = AirQualityPreprocessor(config)
     # Try to load existing model from configurable path
     model_path = os.getenv('MODEL_PATH', './data/models/best_model.pkl')
+    # If MODEL_URL is provided and model file does not exist, try to download it
+    model_url = os.getenv('MODEL_URL')
+    if model_url and not os.path.exists(model_path):
+        try:
+            import requests
+            os.makedirs(os.path.dirname(model_path), exist_ok=True)
+            logger.info(f"Downloading model from {model_url} to {model_path}")
+            r = requests.get(model_url, stream=True, timeout=30)
+            r.raise_for_status()
+            with open(model_path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+            logger.info("Model downloaded successfully")
+        except Exception as e:
+            logger.error(f"Failed to download model from MODEL_URL: {e}")
     if os.path.exists(model_path):
         try:
             forecaster.load_model(model_path)
@@ -126,6 +142,22 @@ async def startup_event():
 
     # Optionally load latest data into memory for the API to serve
     latest_data_path = os.getenv('LATEST_DATA_PATH', './data/processed/processed_data.csv')
+    # If LATEST_DATA_URL is provided and data file does not exist, try to download it
+    latest_data_url = os.getenv('LATEST_DATA_URL')
+    if latest_data_url and not os.path.exists(latest_data_path):
+        try:
+            import requests
+            os.makedirs(os.path.dirname(latest_data_path), exist_ok=True)
+            logger.info(f"Downloading latest data from {latest_data_url} to {latest_data_path}")
+            r = requests.get(latest_data_url, stream=True, timeout=30)
+            r.raise_for_status()
+            with open(latest_data_path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+            logger.info("Latest data downloaded successfully")
+        except Exception as e:
+            logger.error(f"Failed to download latest data from LATEST_DATA_URL: {e}")
     if os.path.exists(latest_data_path):
         try:
             latest_data = pd.read_csv(latest_data_path, parse_dates=['timestamp'])
