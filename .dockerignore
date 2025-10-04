@@ -2,12 +2,17 @@ __pycache__/
 .pytest_cache/
 .venv/
 env/
-data/
+# Ignore only raw data and large files, allow models and processed data to be copied into image
+data/raw/
+*.h5
+*.nc4
 notebooks/
 tests/
 *.pyc
-*.pkl
 *.sqlite3
 dist/
 build/
 __pycache__
+
+# Don't ignore model and processed data (we want them in the image)
+# Keep these lines empty to assure they are included
