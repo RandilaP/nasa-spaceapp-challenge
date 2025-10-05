@@ -34,6 +34,7 @@ class ForecastRequest(BaseModel):
     hours: int = 24
     lat: Optional[float] = None
     lon: Optional[float] = None
+    start_time: Optional[str] = None
 
 
 class ForecastResponse(BaseModel):
@@ -218,11 +219,81 @@ async def get_forecast(request: ForecastRequest):
         raise HTTPException(status_code=503, detail="No data available")
     
     try:
-        # Generate forecast
-        forecast_df = forecaster.forecast_next_hours(latest_data, hours=request.hours)
-        
-        # Format response
+        # Determine base time for the forecast (time-sensitive)
+        if request.start_time:
+            try:
+                base_time = pd.to_datetime(request.start_time)
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid start_time format; use ISO format")
+        else:
+            # use server/system time as the forecast base
+            base_time = pd.Timestamp.now()
+
+        # Generate forecast anchored at base_time
+        forecast_df = forecaster.forecast_next_hours(latest_data, hours=request.hours, base_time=base_time)
+
+        # Build response: include current/latest observation (hours_ahead=0) for demo completeness
         forecasts = []
+        current = latest_data.iloc[-1]
+
+        # If start_time provided, synthesize a current observation aligned to base_time by predicting
+        if request.start_time:
+            try:
+                # Build a feature row from the latest data and overwrite temporal features with base_time
+                feature_row = current.to_frame().T.copy()
+                bt = pd.to_datetime(base_time)
+                if 'hour' in feature_row.columns:
+                    feature_row['hour'] = bt.hour
+                if 'hour_sin' in feature_row.columns:
+                    feature_row['hour_sin'] = np.sin(2 * np.pi * bt.hour / 24)
+                if 'hour_cos' in feature_row.columns:
+                    feature_row['hour_cos'] = np.cos(2 * np.pi * bt.hour / 24)
+                if 'day_of_week' in feature_row.columns:
+                    feature_row['day_of_week'] = bt.dayofweek
+                if 'month' in feature_row.columns:
+                    feature_row['month'] = bt.month
+                if 'day_of_year' in feature_row.columns:
+                    feature_row['day_of_year'] = bt.dayofyear
+                if 'is_weekend' in feature_row.columns:
+                    feature_row['is_weekend'] = int(bt.dayofweek in [5, 6])
+
+                # Select model features and handle missing columns
+                model_features = [c for c in forecaster.feature_names if c in feature_row.columns]
+                X_curr = feature_row[model_features].fillna(0)
+
+                # Predict current AQI anchored to base_time
+                try:
+                    pred_current = forecaster.predict(X_curr)[0]
+                except Exception:
+                    pred_current = float(current['aqi'])
+
+                forecasts.append(ForecastResponse(
+                    timestamp=bt.isoformat(),
+                    hours_ahead=0,
+                    predicted_aqi=float(pred_current),
+                    aqi_category=get_aqi_category(pred_current),
+                    health_message=get_health_message(pred_current)
+                ))
+            except Exception as e:
+                # Fallback to using stored current data if anything goes wrong
+                logger.error(f"Failed to synthesize current observation: {e}")
+                forecasts.append(ForecastResponse(
+                    timestamp=current['timestamp'].isoformat(),
+                    hours_ahead=0,
+                    predicted_aqi=float(current['aqi']),
+                    aqi_category=get_aqi_category(current['aqi']),
+                    health_message=get_health_message(current['aqi'])
+                ))
+        else:
+            forecasts.append(ForecastResponse(
+                timestamp=current['timestamp'].isoformat(),
+                hours_ahead=0,
+                predicted_aqi=float(current['aqi']),
+                aqi_category=get_aqi_category(current['aqi']),
+                health_message=get_health_message(current['aqi'])
+            ))
+
+        # Append forecasted hours
         for _, row in forecast_df.iterrows():
             aqi = row['predicted_aqi']
             forecasts.append(ForecastResponse(
@@ -232,7 +303,7 @@ async def get_forecast(request: ForecastRequest):
                 aqi_category=get_aqi_category(aqi),
                 health_message=get_health_message(aqi)
             ))
-        
+
         return forecasts
     
     except Exception as e:

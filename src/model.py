@@ -115,7 +115,7 @@ class AirQualityForecaster:
         
         return predictions
     
-    def forecast_next_hours(self, current_data: pd.DataFrame, hours: int = 24) -> pd.DataFrame:
+    def forecast_next_hours(self, current_data: pd.DataFrame, hours: int = 24, base_time: pd.Timestamp = None) -> pd.DataFrame:
         """
         Forecast air quality for the next N hours
         Uses iterative prediction with rolling window
@@ -125,26 +125,47 @@ class AirQualityForecaster:
             raise ValueError("Model not trained yet!")
         
         forecasts = []
+        # Use the last row as the starting feature vector
         current_features = current_data[self.feature_names].iloc[-1:].copy()
-        
+
+        # Determine base_time (use provided base_time or now)
+        if base_time is None:
+            base_time = pd.Timestamp.now()
+        else:
+            base_time = pd.to_datetime(base_time)
+
+        # Initialize a rolling window of lag values (we'll update this row in-place)
         for h in range(1, hours + 1):
             # Predict next hour
             pred_aqi = self.predict(current_features)[0]
-            
-            # Update temporal features
-            next_hour = (current_features['hour'].values[0] + h) % 24
-            current_features['hour'] = next_hour
-            current_features['hour_sin'] = np.sin(2 * np.pi * next_hour / 24)
-            current_features['hour_cos'] = np.cos(2 * np.pi * next_hour / 24)
-            
+
+            # Compute timestamp for this forecasted hour
+            ts = base_time + pd.Timedelta(hours=h)
+
+            # Update temporal features based on this timestamp
+            next_hour = int(ts.hour)
+            if 'hour' in current_features.columns:
+                current_features['hour'] = next_hour
+            if 'hour_sin' in current_features.columns:
+                current_features['hour_sin'] = np.sin(2 * np.pi * next_hour / 24)
+            if 'hour_cos' in current_features.columns:
+                current_features['hour_cos'] = np.cos(2 * np.pi * next_hour / 24)
+
             # Update lagged features (simple approach)
-            if 'aqi_lag1' in current_features.columns:
-                current_features['aqi_lag1'] = pred_aqi
-            
+            for lag_col in ['aqi_lag1', 'aqi_lag3', 'aqi_lag6', 'aqi_lag24']:
+                if lag_col in current_features.columns:
+                    # shift lags: lag1 = previous prediction, lag3 = previous lag2 etc. (approximate)
+                    # For simplicity, set lag1 to pred, and decrement others where possible
+                    if lag_col == 'aqi_lag1':
+                        current_features[lag_col] = pred_aqi
+                    else:
+                        # leave other lags unchanged (could be improved with a deque)
+                        current_features[lag_col] = current_features.get(lag_col, current_features.get('aqi', np.nan))
+
             forecasts.append({
                 'hours_ahead': h,
                 'predicted_aqi': pred_aqi,
-                'timestamp': pd.Timestamp.now() + pd.Timedelta(hours=h)
+                'timestamp': ts
             })
         
         return pd.DataFrame(forecasts)
